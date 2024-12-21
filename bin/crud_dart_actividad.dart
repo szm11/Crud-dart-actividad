@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:sqlite3/sqlite3.dart';
+import 'package:path/path.dart';
 
 class Ruta {
   final int id;
@@ -8,6 +10,20 @@ class Ruta {
   final double kilometraje;
 
   Ruta(this.id, this.capacidad, this.estado, this.kilometraje);
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'capacidad': capacidad,
+    'estado': estado,
+    'kilometraje': kilometraje,
+  };
+
+  static Ruta fromJson(Map<String, dynamic> json) => Ruta(
+    json['id'],
+    json['capacidad'],
+    json['estado'],
+    json['kilometraje'],
+  );
 
   @override
   String toString() {
@@ -25,6 +41,24 @@ class Contrato {
 
   Contrato(this.id, this.fechaInicio, this.fechaFin, this.modalidad, this.tarifa, [this.rutaId]);
 
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'fechaInicio': fechaInicio,
+    'fechaFin': fechaFin,
+    'modalidad': modalidad,
+    'tarifa': tarifa,
+    'rutaId': rutaId,
+  };
+
+  static Contrato fromJson(Map<String, dynamic> json) => Contrato(
+    json['id'],
+    json['fechaInicio'],
+    json['fechaFin'],
+    json['modalidad'],
+    json['tarifa'],
+    json['rutaId'],
+  );
+
   @override
   String toString() {
     return '| ${id.toString().padRight(4)} | ${fechaInicio.padRight(12)} | ${fechaFin.padRight(12)} | ${modalidad.padRight(15)} | ${tarifa.toStringAsFixed(2).padLeft(8)} | ${(rutaId?.toString() ?? 'Sin ruta').padRight(8)} |';
@@ -34,6 +68,31 @@ class Contrato {
 class RutaManager {
   final List<Ruta> rutas = [];
   int nextId = 1;
+  late Database database;
+
+  RutaManager() {
+    _initialize();
+  }
+
+  void _initialize() {
+    final dbPath = join(Directory.current.path, 'rutas.db');
+    database = sqlite3.open(dbPath);
+    database.execute('CREATE TABLE IF NOT EXISTS rutas(id INTEGER PRIMARY KEY, capacidad INTEGER, estado TEXT, kilometraje REAL)');
+    loadRutas();
+  }
+
+  void loadRutas() {
+    final ResultSet resultSet = database.select('SELECT * FROM rutas');
+    for (final Row row in resultSet) {
+      final ruta = Ruta(row['id'] as int, row['capacidad'] as int, row['estado'] as String, row['kilometraje'] as double);
+      rutas.add(ruta);
+      nextId = nextId > ruta.id ? nextId : ruta.id + 1;
+    }
+  }
+
+  void saveRuta(Ruta ruta) {
+    database.execute('INSERT INTO rutas (id, capacidad, estado, kilometraje) VALUES (?, ?, ?, ?)', [ruta.id, ruta.capacidad, ruta.estado, ruta.kilometraje]);
+  }
 
   void createRuta() {
     print('--- Crear nueva ruta ---');
@@ -44,7 +103,9 @@ class RutaManager {
     stdout.write('Kilometraje: ');
     final kilometraje = double.tryParse(stdin.readLineSync() ?? '') ?? 0.0;
 
-    rutas.add(Ruta(nextId++, capacidad, estado, kilometraje));
+    final nuevaRuta = Ruta(nextId++, capacidad, estado, kilometraje);
+    rutas.add(nuevaRuta);
+    saveRuta(nuevaRuta);
     print('Ruta creada con éxito.');
   }
 
@@ -71,14 +132,80 @@ class RutaManager {
       return null;
     }
   }
+
+  void deleteRuta() {
+    print('--- Borrar ruta ---');
+    stdout.write('ID de la ruta a borrar: ');
+    final idInput = stdin.readLineSync();
+    final id = int.tryParse(idInput ?? '');
+    
+    if (id != null) {
+      final ruta = getRutaById(id);
+      if (ruta != null) {
+        rutas.remove(ruta);
+        database.execute('DELETE FROM rutas WHERE id = ?', [id]);
+        print('Ruta borrada con éxito.');
+      } else {
+        print('Ruta no encontrada.');
+      }
+    } else {
+      print('ID inválido.');
+    }
+  }
+
+  void searchRutas() {
+    print('--- Buscar rutas ---');
+    stdout.write('Ingrese el término a buscar: ');
+    final searchTerm = stdin.readLineSync() ?? '';
+
+    final rutasEncontradas = rutas.where((r) =>
+      r.capacidad.toString().contains(searchTerm) ||
+      r.estado.contains(searchTerm) ||
+      r.kilometraje.toString().contains(searchTerm)
+    ).toList();
+
+    if (rutasEncontradas.isEmpty) {
+      print('No se encontraron rutas con el término: $searchTerm');
+    } else {
+      for (var ruta in rutasEncontradas) {
+        print(ruta.toString());
+      }
+    }
+  }
 }
 
 class ContratoManager {
   final List<Contrato> contratos = [];
   final RutaManager rutaManager;
   int nextId = 1;
+  late Database database;
 
-  ContratoManager(this.rutaManager);
+  ContratoManager(this.rutaManager) {
+    _initialize();
+  }
+
+  void _initialize() {
+    final dbPath = join(Directory.current.path, 'contratos.db');
+    database = sqlite3.open(dbPath);
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS contratos(id INTEGER PRIMARY KEY, fechaInicio TEXT, fechaFin TEXT, modalidad TEXT, tarifa REAL, rutaId INTEGER)',
+    );
+    loadContratos();
+  }
+
+  void loadContratos() {
+    final ResultSet resultSet = database.select('SELECT * FROM contratos');
+    for (final Row row in resultSet) {
+      final contrato = Contrato.fromJson(row);
+      contratos.add(contrato);
+      nextId = nextId > contrato.id ? nextId : contrato.id + 1;
+    }
+  }
+
+  void saveContrato(Contrato contrato) {
+    database.execute('INSERT INTO contratos (id, fechaInicio, fechaFin, modalidad, tarifa, rutaId) VALUES (?, ?, ?, ?, ?, ?)', 
+      [contrato.id, contrato.fechaInicio, contrato.fechaFin, contrato.modalidad, contrato.tarifa, contrato.rutaId]);
+  }
 
   void createContrato() {
     print('--- Crear nuevo contrato ---');
@@ -102,51 +229,78 @@ class ContratoManager {
       }
     }
 
-    contratos.add(Contrato(nextId++, fechaInicio, fechaFin, modalidad, tarifa, rutaId));
+    final nuevoContrato = Contrato(nextId++, fechaInicio, fechaFin, modalidad, tarifa, rutaId);
+    contratos.add(nuevoContrato);
+    saveContrato(nuevoContrato);
     print('Contrato creado con éxito.');
+  }
+
+  void deleteContrato() {
+    print('--- Borrar contrato ---');
+    stdout.write('ID del contrato a borrar: ');
+    final idInput = stdin.readLineSync();
+    final id = int.tryParse(idInput ?? '');
+    
+    if (id != null) {
+      final contrato = contratos.firstWhere((c) => c.id == id, orElse: () => Contrato(0, '', '', '', 0.0, null));
+      if (contrato.id != 0) {
+        contratos.remove(contrato);
+        database.execute('DELETE FROM contratos WHERE id = ?', [id]);
+        print('Contrato borrado con éxito.');
+      } else {
+        print('Contrato no encontrado.');
+      }
+    } else {
+      print('ID inválido.');
+    }
   }
 
   void readContrato() {
     print('--- Consultar contrato ---');
-    stdout.write('ID del contrato: ');
-    final id = int.tryParse(stdin.readLineSync() ?? '');
-    
-    // Buscar el contrato de manera segura
-    final contrato = contratos.where((c) => c.id == id).firstOrNull;
+    stdout.write('ID del contrato a consultar: ');
+    final idInput = stdin.readLineSync();
+    final id = int.tryParse(idInput ?? '');
 
-    if (contrato != null) {
-      print('Contrato encontrado:');
-      print(_tableHeader());
-      print(contrato.toString());
+    if (id != null) {
+      final contrato = contratos.firstWhere((c) => c.id == id, orElse: () => Contrato(0, '', '', '', 0.0, null));
+      if (contrato.id != 0) {
+        print(contrato.toString());
+      } else {
+        print('Contrato no encontrado.');
+      }
     } else {
-      print('Contrato no encontrado.');
+      print('ID inválido.');
     }
   }
 
   void updateContrato() {
     print('--- Actualizar contrato ---');
-    stdout.write('ID del contrato: ');
-    final id = int.tryParse(stdin.readLineSync() ?? '');
-    final Contrato? contrato = contratos.firstWhere(
-      (c) => c.id == id,
-      orElse: () => null as Contrato,
-    );
+    stdout.write('ID del contrato a actualizar: ');
+    final idInput = stdin.readLineSync();
+    final id = int.tryParse(idInput ?? '');
 
-    if (contrato != null) {
-      stdout.write('Nueva fecha inicio (actual: ${contrato.fechaInicio}): ');
-      final fechaInicio = stdin.readLineSync() ?? contrato.fechaInicio;
-      stdout.write('Nueva fecha fin (actual: ${contrato.fechaFin}): ');
-      final fechaFin = stdin.readLineSync() ?? contrato.fechaFin;
-      stdout.write('Nueva modalidad (actual: ${contrato.modalidad}): ');
-      final modalidad = stdin.readLineSync() ?? contrato.modalidad;
-      stdout.write('Nueva tarifa (actual: ${contrato.tarifa}): ');
-      final tarifa = double.tryParse(stdin.readLineSync() ?? '') ?? contrato.tarifa;
+    if (id != null) {
+      final contrato = contratos.firstWhere((c) => c.id == id, orElse: () => Contrato(0, '', '', '', 0.0, null));
+      if (contrato.id != 0) {
+        stdout.write('Nueva fecha inicio (YYYY-MM-DD) [actual: ${contrato.fechaInicio}]: ');
+        final nuevaFechaInicio = stdin.readLineSync() ?? contrato.fechaInicio;
+        stdout.write('Nueva fecha fin (YYYY-MM-DD) [actual: ${contrato.fechaFin}]: ');
+        final nuevaFechaFin = stdin.readLineSync() ?? contrato.fechaFin;
+        stdout.write('Nueva modalidad [actual: ${contrato.modalidad}]: ');
+        final nuevaModalidad = stdin.readLineSync() ?? contrato.modalidad;
+        stdout.write('Nueva tarifa [actual: ${contrato.tarifa}]: ');
+        final nuevaTarifa = double.tryParse(stdin.readLineSync() ?? '') ?? contrato.tarifa;
 
-      contratos[contratos.indexOf(contrato)] =
-          Contrato(contrato.id, fechaInicio, fechaFin, modalidad, tarifa, contrato.rutaId);
-      print('Contrato actualizado con éxito.');
+        final contratoActualizado = Contrato(contrato.id, nuevaFechaInicio, nuevaFechaFin, nuevaModalidad, nuevaTarifa, contrato.rutaId);
+        contratos[contratos.indexOf(contrato)] = contratoActualizado;
+        database.execute('UPDATE contratos SET fechaInicio = ?, fechaFin = ?, modalidad = ?, tarifa = ? WHERE id = ?', 
+          [nuevaFechaInicio, nuevaFechaFin, nuevaModalidad, nuevaTarifa, contrato.id]);
+        print('Contrato actualizado con éxito.');
+      } else {
+        print('Contrato no encontrado.');
+      }
     } else {
-      print('Contrato no encontrado.');
+      print('ID inválido.');
     }
   }
 
@@ -155,7 +309,6 @@ class ContratoManager {
     if (contratos.isEmpty) {
       print('No hay contratos registrados.');
     } else {
-      print(_tableHeader());
       for (var contrato in contratos) {
         print(contrato.toString());
       }
@@ -164,28 +317,24 @@ class ContratoManager {
 
   void searchContratos() {
     print('--- Buscar contratos ---');
-    stdout.write('Ingrese término de búsqueda: ');
-    final term = stdin.readLineSync()?.toLowerCase() ?? '';
-    final resultados = contratos.where((c) =>
-        c.fechaInicio.toLowerCase().contains(term) ||
-        c.fechaFin.toLowerCase().contains(term) ||
-        c.modalidad.toLowerCase().contains(term) ||
-        c.tarifa.toString().contains(term) ||
-        c.id.toString().contains(term)).toList();
+    stdout.write('Ingrese el término a buscar: ');
+    final searchTerm = stdin.readLineSync() ?? '';
 
-    if (resultados.isEmpty) {
-      print('No se encontraron contratos que coincidan con el término.');
+    final contratosEncontrados = contratos.where((c) =>
+      c.fechaInicio.contains(searchTerm) ||
+      c.fechaFin.contains(searchTerm) ||
+      c.modalidad.contains(searchTerm) ||
+      c.tarifa.toString().contains(searchTerm) ||
+      (c.rutaId?.toString() ?? '').contains(searchTerm)
+    ).toList();
+
+    if (contratosEncontrados.isEmpty) {
+      print('No se encontraron contratos con el término: $searchTerm');
     } else {
-      print('Resultados de la búsqueda:');
-      print(_tableHeader());
-      for (var contrato in resultados) {
+      for (var contrato in contratosEncontrados) {
         print(contrato.toString());
       }
     }
-  }
-
-  String _tableHeader() {
-    return '| ID   | Fecha Inicio  | Fecha Fin    | Modalidad       | Tarifa  | Ruta ID |';
   }
 }
 
@@ -202,7 +351,10 @@ void main() {
     print('5. Buscar contratos');
     print('6. Crear ruta');
     print('7. Listar rutas');
-    print('8. Salir');
+    print('8. Buscar rutas');
+    print('9. Borrar contrato');
+    print('10. Borrar ruta');
+    print('11. Salir');
     stdout.write('Seleccione una opción: ');
     final opcion = stdin.readLineSync();
 
@@ -229,6 +381,15 @@ void main() {
         rutaManager.listRutas();
         break;
       case '8':
+        rutaManager.searchRutas();
+        break;
+      case '9':
+        contratoManager.deleteContrato();
+        break;
+      case '10':
+        rutaManager.deleteRuta();
+        break;
+      case '11':
         print('Saliendo del programa. ¡Hasta luego!');
         return;
       default:
